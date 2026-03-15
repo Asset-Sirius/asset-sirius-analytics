@@ -5,6 +5,8 @@
 # Cache de bytecode Python
 /apps/ingestao_cvm/__pycache__/
 /apps/data_cleaning/__pycache__/
+__pycache__/
+*.py[cod]
 
 # Arquivos de sistema (macOS)
 .DS_Store
