@@ -1,0 +1,10 @@
+# Dados brutos e tratados gerados localmente
+/dados_cvm/
+/dados_tgt/
+
+# Cache de bytecode Python
+/apps/ingestao_cvm/__pycache__/
+/apps/data_cleaning/__pycache__/
+
+# Arquivos de sistema (macOS)
+.DS_Store

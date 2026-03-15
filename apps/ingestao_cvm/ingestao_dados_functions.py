@@ -5,16 +5,22 @@ import importlib.util
 import re
 import shutil
 import ssl
+import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
 USER_AGENT = "Mozilla/5.0 (compatible; CVMDownloader/1.0)"
 BASE_URL = "https://dados.cvm.gov.br/dados/"
+
+
+def log(nivel: str, mensagem: str) -> None:
+    """Imprime mensagem de execução com nível e timestamp."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] [{nivel}] {mensagem}")
 
 
 def criar_contexto_ssl() -> ssl.SSLContext:
@@ -61,7 +67,7 @@ FONTE_CVM = FonteTipo(
 
 
 def arquivo_relevante(arquivo: ArquivoCVM) -> bool:
-    """Valida se o arquivo está entre os artefatos necessários.
+    """Define se o arquivo pertence ao escopo da ingestão.
 
     Regras:
     - cadastro: apenas o arquivo zip `registro_fundo_classe`;
@@ -96,7 +102,8 @@ def extrair_arquivos_cvm(html: str, base_url: str) -> list[ArquivoCVM]:
         base_url: URL base usada para transformar links relativos em absolutos.
 
     Returns:
-        Lista de arquivos com URL, nome e data de modificação (quando disponível).
+        Lista deduplicada de arquivos com URL, nome e data de modificação
+        (quando disponível).
     """
     padrao = re.compile(
         r'<a\s+href="([^"]+)">[^<]*</a>\s+(\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2})',
@@ -133,44 +140,6 @@ def extrair_arquivos_cvm(html: str, base_url: str) -> list[ArquivoCVM]:
     return sorted(resultado, key=lambda a: a.nome)
 
 
-def filtrar_por_carga(arquivos: Iterable[ArquivoCVM], tipo_carga: str, data_execucao: datetime) -> list[ArquivoCVM]:
-    """Filtra arquivos para carga incremental ou histórica.
-
-    Regras aplicadas:
-    - incremental: arquivos atualizados na data da execução;
-    - histórica: arquivos atualizados nos últimos 90 dias.
-
-    Args:
-        arquivos: Coleção de arquivos já coletados da CVM.
-        tipo_carga: Tipo de carga desejado ("incremental" ou "historica").
-        data_execucao: Data/hora de referência para aplicação do filtro.
-
-    Returns:
-        Lista de arquivos elegíveis para o modo de carga informado.
-    """
-    if tipo_carga == "incremental":
-        hoje = data_execucao.date()
-        filtrados: list[ArquivoCVM] = []
-        for arquivo in arquivos:
-            if arquivo.data_modificacao and arquivo.data_modificacao.date() == hoje:
-                filtrados.append(arquivo)
-                continue
-
-            if not arquivo.data_modificacao:
-                token_data = data_execucao.strftime("%Y%m%d")
-                if token_data in arquivo.nome:
-                    filtrados.append(arquivo)
-
-        return filtrados
-
-    limite = data_execucao - timedelta(days=90)
-    return [
-        arquivo
-        for arquivo in arquivos
-        if arquivo.data_modificacao is None or arquivo.data_modificacao >= limite
-    ]
-
-
 def baixar_arquivo(url: str, destino: Path, timeout: int) -> tuple[bool, str]:
     """Realiza o download de um arquivo e salva localmente.
 
@@ -202,7 +171,7 @@ def coletar_arquivos_fi(timeout: int) -> list[ArquivoCVM]:
         timeout: Tempo máximo de espera da requisição, em segundos.
 
     Returns:
-        Lista ordenada e sem duplicidade dos arquivos necessários.
+        Lista ordenada e sem duplicidade dos arquivos relevantes para ingestão.
     """
     arquivos: list[ArquivoCVM] = []
 
@@ -223,66 +192,92 @@ def coletar_arquivos_fi(timeout: int) -> list[ArquivoCVM]:
 
 
 def limpar_diretorio_destino(diretorio: Path) -> None:
-    """Remove completamente os arquivos existentes no diretório de saída."""
+    """Remove completamente o conteúdo anterior do diretório de saída."""
     if diretorio.exists():
         shutil.rmtree(diretorio)
     diretorio.mkdir(parents=True, exist_ok=True)
 
 
-def diretorio_tem_arquivos(diretorio: Path) -> bool:
-    """Verifica se o diretório possui ao menos um arquivo.
-
-    Essa função é usada para decidir o modo de carga automática:
-    - sem arquivos: carga histórica;
-    - com arquivos: carga incremental.
+def descompactar_zips_e_manter_csv(diretorio: Path) -> tuple[int, int, int]:
+    """Descompacta arquivos ZIP, remove os ZIPs e mantém apenas CSVs.
 
     Args:
-        diretorio: Caminho do diretório de saída da ingestão.
+        diretorio: Diretório base com os arquivos baixados.
 
     Returns:
-        True se existir pelo menos um arquivo, False caso contrário.
-    """
-    if not diretorio.exists():
-        return False
+        Tupla com:
+        - quantidade de ZIPs descompactados com sucesso;
+        - quantidade de ZIPs removidos;
+        - quantidade de arquivos não-CSV removidos.
 
-    return any(caminho.is_file() for caminho in diretorio.rglob("*"))
+    Observação:
+        Ao final do processo, o diretório mantém apenas arquivos `.csv`.
+    """
+    zips_descompactados = 0
+    zips_removidos = 0
+    nao_csv_removidos = 0
+
+    arquivos_zip = sorted(diretorio.rglob("*.zip"))
+    for arquivo_zip in arquivos_zip:
+        try:
+            with zipfile.ZipFile(arquivo_zip, "r") as arquivo:
+                arquivo.extractall(path=arquivo_zip.parent)
+            zips_descompactados += 1
+        except zipfile.BadZipFile as erro:
+            log("WARN", f"ZIP inválido, não foi possível descompactar {arquivo_zip.name}: {erro}")
+            continue
+        except Exception as erro:
+            log("WARN", f"Erro ao descompactar {arquivo_zip.name}: {erro}")
+            continue
+
+        try:
+            arquivo_zip.unlink()
+            zips_removidos += 1
+        except Exception as erro:
+            log("WARN", f"Erro ao remover ZIP {arquivo_zip.name}: {erro}")
+
+    for arquivo in diretorio.rglob("*"):
+        if not arquivo.is_file():
+            continue
+        if arquivo.suffix.lower() == ".csv":
+            continue
+        try:
+            arquivo.unlink()
+            nao_csv_removidos += 1
+        except Exception as erro:
+            log("WARN", f"Erro ao remover arquivo não-CSV {arquivo.name}: {erro}")
+
+    return zips_descompactados, zips_removidos, nao_csv_removidos
 
 
 def executar_download(
     diretorio_saida: Path,
     timeout: int,
-    tipo_carga: str,
 ) -> None:
-    """Executa o fluxo completo de download para os tipos selecionados.
+    """Executa o fluxo completo de download (carga completa).
 
     Args:
         diretorio_saida: Diretório raiz para salvar os arquivos baixados.
         timeout: Tempo máximo de espera das requisições HTTP, em segundos.
-        tipo_carga: Modo de carga ("incremental" ou "historica").
 
     Returns:
-        None. A função realiza os downloads e imprime logs de execução.
+        None. A função realiza os downloads e registra logs de execução.
     """
-    data_execucao = datetime.now()
-    print(f"Tipo de carga: {tipo_carga}")
-    if tipo_carga == "historica":
-        print("Regra histórica: últimos 90 dias de atualização na base CVM.")
-    else:
-        print("Regra incremental: arquivos atualizados no dia da execução.")
+    log("INFO", "Tipo de carga: completa (limpa destino e baixa todos os arquivos).")
 
-    print(f"\nFonte: {FONTE_CVM.descricao}")
-    print("Limpando diretório de saída antes de iniciar os downloads...")
+    log("INFO", f"Fonte: {FONTE_CVM.descricao}")
+    log("INFO", "Limpando diretório de saída antes de iniciar os downloads...")
     limpar_diretorio_destino(diretorio_saida)
 
     try:
+        log("INFO", "Coletando links de arquivos na CVM...")
         arquivos = coletar_arquivos_fi(timeout=timeout)
     except Exception as erro:
-        print(f"Erro ao coletar links FI: {erro}")
+        log("ERROR", f"Erro ao coletar links FI: {erro}")
         return
 
-    arquivos = filtrar_por_carga(arquivos, tipo_carga=tipo_carga, data_execucao=data_execucao)
     if not arquivos:
-        print("Nenhum arquivo encontrado para o modo de carga informado.")
+        log("WARN", "Nenhum arquivo relevante encontrado para download.")
         return
 
     total = len(arquivos)
@@ -299,8 +294,18 @@ def executar_download(
             )
             if fez_download:
                 baixados += 1
-            print(f"[{idx}/{total}] {msg}")
+            log("INFO", f"[{idx}/{total}] {msg}")
         except Exception as erro:
-            print(f"[{idx}/{total}] Erro ao baixar {arquivo.nome}: {erro}")
+            log("ERROR", f"[{idx}/{total}] Erro ao baixar {arquivo.nome}: {erro}")
 
-    print(f"Resumo: {baixados} downloads de {total} arquivos listados.")
+    log("INFO", "Processando arquivos compactados e mantendo apenas CSV...")
+    zips_descompactados, zips_removidos, nao_csv_removidos = descompactar_zips_e_manter_csv(diretorio_saida)
+    log(
+        "INFO",
+        "Resumo pós-processamento: "
+        f"{zips_descompactados} ZIP(s) descompactados, "
+        f"{zips_removidos} ZIP(s) removidos, "
+        f"{nao_csv_removidos} arquivo(s) não-CSV removidos."
+    )
+
+    log("INFO", f"Resumo: {baixados} downloads de {total} arquivos listados.")
