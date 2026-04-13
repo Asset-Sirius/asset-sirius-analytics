@@ -333,7 +333,7 @@ SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS;
 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS;
 
 -- Criar usuário
-CREATE USER 'usr_asset_sirius'@'%' IDENTIFIED BY '123456';
+CREATE USER 'usr_asset_sirius'@'%' IDENTIFIED BY '12345678';
 
 -- Conceder permissões no schema
 GRANT ALL PRIVILEGES ON ASSET_SIRIUS.* TO 'usr_asset_sirius'@'%';
