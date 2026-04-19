@@ -678,6 +678,7 @@ class SimuladorClientes:
     def gerar_dim_cliente_simulado(self, n_clientes: int = 10000) -> pd.DataFrame:
         """
         Gera dimensao de cliente simulada
+        Baseado no padrão do simulador_aplicacao_resgate
         
         Args:
             n_clientes: quantidade de clientes a gerar
@@ -686,48 +687,120 @@ class SimuladorClientes:
             DataFrame com dim_cliente_simulado
         """
         segmentos = ['varejo', 'private', 'institucional']
-        perfis_risco = ['conservador', 'moderado', 'arrojado', 'agressivo']
-        ufs = ['SP', 'RJ', 'MG', 'BA', 'RS', 'PR', 'SC', 'DF']
+        dist_segmentos = [0.70, 0.20, 0.10]  # 70% varejo, 20% private, 10% institucional
         
-        data_inicio = datetime(2020, 1, 1)
-        data_fim = datetime(2024, 12, 31)
+        perfis_risco = ['conservador', 'moderado', 'arrojado', 'agressivo']
+        
+        # Distribuição por perfil (mais conservadores)
+        dist_perfil = {
+            'varejo': [0.40, 0.35, 0.20, 0.05],
+            'private': [0.15, 0.30, 0.35, 0.20],
+            'institucional': [0.05, 0.15, 0.30, 0.50]
+        }
+        
+        ufs = ['SP', 'RJ', 'MG', 'BA', 'RS', 'PR', 'SC', 'ES', 'DF', 'PE']
+        cidades_por_uf = {
+            'SP': ['São Paulo', 'Campinas', 'Santos', 'Ribeirão Preto'],
+            'RJ': ['Rio de Janeiro', 'Niterói', 'Duque de Caxias'],
+            'MG': ['Belo Horizonte', 'Uberlândia', 'Contagem'],
+            'BA': ['Salvador', 'Feira de Santana', 'Vitória da Conquista'],
+            'RS': ['Porto Alegre', 'Caxias do Sul', 'Pelotas'],
+            'PR': ['Curitiba', 'Londrina', 'Maringá'],
+            'SC': ['Florianópolis', 'Joinville', 'Blumenau'],
+            'ES': ['Vitória', 'Vila Velha', 'Cariacica'],
+            'DF': ['Brasília'],
+            'PE': ['Recife', 'Jaboatão', 'Olinda']
+        }
+        
+        canais = ['digital', 'agencia', 'indicacao', 'outro']
+        data_inicio_min = datetime(2018, 1, 1)
+        data_fim_max = datetime(2026, 4, 19)
+        
+        # Gera segmentos
+        segmentos_list = np.random.choice(segmentos, n_clientes, p=dist_segmentos)
+        
+        # Gera perfil de risco por segmento
+        perfis_list = []
+        for seg in segmentos_list:
+            perfis_list.append(np.random.choice(perfis_risco, p=dist_perfil[seg]))
+        
+        # Gera UFs
+        ufs_list = np.random.choice(ufs, n_clientes)
+        
+        # Gera cidades baseado em UF
+        cidades_list = [
+            np.random.choice(cidades_por_uf[uf])
+            for uf in ufs_list
+        ]
+        
+        # Gera datas de nascimento (clientes entre 21 e 75 anos)
+        hoje = datetime(2026, 4, 19)
+        datas_nasc = [
+            hoje - timedelta(days=int(np.random.normal(loc=45*365, scale=15*365)))
+            for _ in range(n_clientes)
+        ]
+        
+        # Gera renda por segmento (exponencial com média realista)
+        renda_list = []
+        for seg in segmentos_list:
+            if seg == 'varejo':
+                renda = np.random.lognormal(mean=10.5, sigma=0.8)  # Média ~R$50k
+            elif seg == 'private':
+                renda = np.random.lognormal(mean=11.5, sigma=0.9)  # Média ~R$100k
+            else:  # institucional
+                renda = np.random.lognormal(mean=12.5, sigma=1.0)  # Média ~R$250k
+            renda_list.append(max(20000, renda))  # Mínimo R$20k
+        
+        # Gera patrimônio (correlacionado com renda e segmento)
+        patrimonio_list = []
+        for renda, seg in zip(renda_list, segmentos_list):
+            if seg == 'varejo':
+                patrimonio = renda * np.random.uniform(2, 5)
+            elif seg == 'private':
+                patrimonio = renda * np.random.uniform(5, 15)
+            else:  # institucional
+                patrimonio = renda * np.random.uniform(10, 50)
+            patrimonio_list.append(patrimonio)
+        
+        # Gera data de início do relacionamento
+        datas_relacionamento = [
+            data_inicio_min + timedelta(days=int(np.random.rand() * (data_fim_max - data_inicio_min).days))
+            for _ in range(n_clientes)
+        ]
+        
+        # Gera nomes realistas (simulado)
+        primeiros_nomes = ['José', 'Maria', 'João', 'Ana', 'Carlos', 'Paula', 'Francisco', 'Lucia', 'Antonio', 'Fernanda']
+        sobrenomes = ['Silva', 'Santos', 'Oliveira', 'Souza', 'Costa', 'Ferreira', 'Gomes', 'Martins', 'Alves', 'Pereira']
+        nomes_list = [f"{np.random.choice(primeiros_nomes)} {np.random.choice(sobrenomes)}" for _ in range(n_clientes)]
         
         dim_cliente = pd.DataFrame({
             'sk_cliente': range(1, n_clientes + 1),
             'id_cliente': [f"CLI_{i:07d}" for i in range(1, n_clientes + 1)],
-            'nome_cliente': [f"Cliente_{i}" for i in range(1, n_clientes + 1)],
-            'data_nascimento': [
-                data_inicio + timedelta(days=int(np.random.rand() * (data_fim - data_inicio).days))
-                for _ in range(n_clientes)
-            ],
-            'perfil_risco': np.random.choice(perfis_risco, n_clientes),
-            'segmento': np.random.choice(segmentos, n_clientes),
-            'uf': np.random.choice(ufs, n_clientes),
-            'cidade': [f"Cidade_{i % 100}" for i in range(n_clientes)],
-            'renda_estimada': np.random.exponential(scale=50000, size=n_clientes),
-            'patrimonio_estimado': np.random.exponential(scale=200000, size=n_clientes),
-            'data_inicio_relacionamento': [
-                data_inicio + timedelta(days=int(np.random.rand() * (data_fim - data_inicio).days))
-                for _ in range(n_clientes)
-            ],
-            'canal_origem': np.random.choice(['web', 'telefone', 'presencial', 'app'], n_clientes),
-            'status_cliente': np.random.choice(['ativo', 'inativo'], n_clientes, p=[0.85, 0.15])
+            'nome_cliente': nomes_list,
+            'data_nascimento': datas_nasc,
+            'faixa_etaria': pd.cut(
+                [(hoje - d).days / 365.25 for d in datas_nasc],
+                bins=[20, 30, 40, 50, 60, 100],
+                labels=['21-30', '31-40', '41-50', '51-60', '60+']
+            ),
+            'perfil_risco': perfis_list,
+            'segmento': segmentos_list,
+            'uf': ufs_list,
+            'cidade': cidades_list,
+            'renda_estimada': renda_list,
+            'patrimonio_estimado': patrimonio_list,
+            'data_inicio_relacionamento': datas_relacionamento,
+            'canal_origem': np.random.choice(canais, n_clientes, p=[0.40, 0.30, 0.20, 0.10]),
+            'status_cliente': np.random.choice(['ativo', 'inativo'], n_clientes, p=[0.88, 0.12])
         })
         
-        # Calcula faixa etaria
-        dim_cliente['faixa_etaria'] = pd.cut(
-            (datetime.today() - dim_cliente['data_nascimento']).dt.days / 365.25,
-            bins=[0, 25, 35, 50, 65, 150],
-            labels=['18-25', '26-35', '36-50', '51-65', '65+']
-        )
-        
         self.dim_cliente = dim_cliente
-        print(f"✓ dim_cliente_simulado criada: {n_clientes} clientes")
+        print(f"✓ dim_cliente_simulado criada: {n_clientes} clientes (realista)")
         return dim_cliente
     
     def exportar_simulador(self, path_output: str) -> None:
         """
-        Exporta dados simulados (LOCAL - Sem S3)
+        Exporta dados simulados com particionamento por mês
         Formatos: Parquet (binário, comprimido) + CSV (texto, legível)
         
         Args:
@@ -742,20 +815,56 @@ class SimuladorClientes:
             print(f"  - Caminho: {path_output}")
             
             if self.dim_cliente is not None:
-                self.dim_cliente.to_parquet(f"{path_output}/dim_cliente_simulado.parquet", index=False)
-                self.dim_cliente.to_csv(f"{path_output}/dim_cliente_simulado.csv", index=False, sep=';', encoding='latin-1')
-                print(f"  ✓ dim_cliente_simulado (parquet + csv)")
+                # dim_cliente sem partição (é dimensão)
+                path_dim_cliente = Path(path_output) / "dim_cliente_simulado"
+                path_dim_cliente.mkdir(parents=True, exist_ok=True)
+                self.dim_cliente.to_parquet(f"{path_dim_cliente}/data.parquet", index=False)
+                self.dim_cliente.to_csv(f"{path_dim_cliente}/data.csv", index=False, sep=';', encoding='latin-1')
+                print(f"  ✓ dim_cliente_simulado/ (arquivo único)")
             
             if self.fct_cliente_posicao is not None:
-                self.fct_cliente_posicao.to_parquet(f"{path_output}/fct_cliente_posicao_diaria_simulada.parquet", index=False)
-                self.fct_cliente_posicao.to_csv(f"{path_output}/fct_cliente_posicao_diaria_simulada.csv", index=False, sep=';', encoding='latin-1')
-                print(f"  ✓ fct_cliente_posicao_diaria_simulada (parquet + csv)")
+                # Particionado por ano_mes
+                self._exportar_fato_particionado(
+                    self.fct_cliente_posicao,
+                    "sk_data",
+                    "fct_cliente_posicao_diaria_simulada",
+                    path_output
+                )
+                print(f"  ✓ fct_cliente_posicao_diaria_simulada/ (particionado por mês)")
             
             if self.fct_cliente_risco is not None:
-                self.fct_cliente_risco.to_parquet(f"{path_output}/fct_cliente_risco_diario_simulada.parquet", index=False)
-                self.fct_cliente_risco.to_csv(f"{path_output}/fct_cliente_risco_diario_simulada.csv", index=False, sep=';', encoding='latin-1')
-                print(f"  ✓ fct_cliente_risco_diario_simulada (parquet + csv)")
+                # Particionado por ano_mes
+                self._exportar_fato_particionado(
+                    self.fct_cliente_risco,
+                    "sk_data",
+                    "fct_cliente_risco_diario_simulada",
+                    path_output
+                )
+                print(f"  ✓ fct_cliente_risco_diario_simulada/ (particionado por mês)")
             
         except Exception as e:
             print(f"✗ Erro ao exportar simulador: {e}")
+            raise
+    
+    def _exportar_fato_particionado(self, df: pd.DataFrame, col_data: str,
+                                     nome_tabela: str, path_output: str) -> None:
+        """Exporta fato particionado por ano_mes"""
+        try:
+            df_temp = df.copy()
+            df_temp['ano_mes'] = (df_temp[col_data] // 100).astype(str)
+            
+            path_tabela = Path(path_output) / nome_tabela
+            path_tabela.mkdir(parents=True, exist_ok=True)
+            
+            for ano_mes, grupo in df_temp.groupby('ano_mes', sort=True):
+                grupo_clean = grupo.drop(columns=['ano_mes'])
+                
+                path_mes = path_tabela / f"ano_mes={ano_mes}"
+                path_mes.mkdir(parents=True, exist_ok=True)
+                
+                grupo_clean.to_parquet(f"{path_mes}/data.parquet", index=False)
+                grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='latin-1')
+        
+        except Exception as e:
+            print(f"✗ Erro ao exportar particionado {nome_tabela}: {e}")
             raise
