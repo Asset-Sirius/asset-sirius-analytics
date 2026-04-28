@@ -31,7 +31,7 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -197,21 +197,14 @@ def _salvar_particionado_s3(s3_client, df: pd.DataFrame, col_data: str,
         tamanho_total = 0
         for ano_mes, grupo in df_temp.groupby('ano_mes', sort=True):
             grupo_clean = grupo.drop(columns=['ano_mes'])
-            
-            # Salva parquet
-            buffer = io.BytesIO()
-            grupo_clean.to_parquet(buffer, index=False, compression="snappy")
-            tamanho_mb = len(buffer.getvalue()) / (1024 * 1024)
-            
-            key = f"{prefixo}/{nome_tabela}/ano_mes={ano_mes}/data.parquet"
-            s3_client.put_object(Bucket=bucket, Key=key, Body=buffer.getvalue())
-            tamanho_total += tamanho_mb
-            
-            # Salva csv
+
+            # Salva apenas CSV para tabelas particionadas
             buffer_csv = io.StringIO()
             grupo_clean.to_csv(buffer_csv, sep=';', index=False)
             key_csv = f"{prefixo}/{nome_tabela}/ano_mes={ano_mes}/data.csv"
-            s3_client.put_object(Bucket=bucket, Key=key_csv, Body=buffer_csv.getvalue().encode('latin-1'))
+            conteudo_csv = buffer_csv.getvalue().encode('latin-1')
+            s3_client.put_object(Bucket=bucket, Key=key_csv, Body=conteudo_csv)
+            tamanho_total += len(conteudo_csv) / (1024 * 1024)
         
         return tamanho_total
     except Exception as e:
@@ -241,19 +234,22 @@ def _encontrar_coluna_opcional(df: pd.DataFrame, variacoes: list) -> Optional[st
         return None
 
 
-def criar_dim_tempo(data_inicio: str, data_fim: str) -> pd.DataFrame:
+def criar_dim_tempo(data_inicio: Optional[str] = None, data_fim: Optional[str] = None) -> pd.DataFrame:
     """
-    Cria dimensão de tempo
+    Cria dimensão de tempo usando apenas D-1 (ontem)
     
     Args:
-        data_inicio: formato YYYY-MM-DD
-        data_fim: formato YYYY-MM-DD
+        data_inicio: ignorado (mantido por compatibilidade)
+        data_fim: ignorado (mantido por compatibilidade)
     
     Returns:
         DataFrame com dim_tempo
     """
     try:
-        datas = pd.date_range(start=data_inicio, end=data_fim, freq='D')
+        # Determina o primeiro dia do mês atual até hoje
+        hoje = datetime.now().date()
+        primeiro_dia_mes_atual = hoje.replace(day=1)
+        datas = pd.date_range(start=primeiro_dia_mes_atual, end=hoje, freq='D')
         
         dim_tempo = pd.DataFrame({
             'sk_data': datas.strftime('%Y%m%d').astype(int),
@@ -266,7 +262,7 @@ def criar_dim_tempo(data_inicio: str, data_fim: str) -> pd.DataFrame:
             'eh_fim_de_mes': datas.is_month_end.astype(int)
         })
         
-        log("INFO", f"dim_tempo criada: {len(dim_tempo)} registros ({data_inicio} a {data_fim})")
+        log("INFO", f"dim_tempo criada: {len(dim_tempo)} registros ({primeiro_dia_mes_atual} a {hoje})")
         return dim_tempo
     except Exception as e:
         log("ERROR", f"Erro ao criar dim_tempo: {e}")
@@ -594,7 +590,7 @@ def lambda_handler(event, context):
         
         log("INFO", "[2/4] Criando tabelas reais (CVM)...")
         
-        dim_tempo = criar_dim_tempo(data_inicio, data_fim)
+        dim_tempo = criar_dim_tempo()
         dim_fundo = criar_dim_fundo(df_registro_classe, df_registro_fundo)
         fct_fundo_diario = criar_fct_fundo_diario(df_inf_diario, dim_tempo, dim_fundo)
         agg_fundo_periodo = criar_agg_fundo_periodo(fct_fundo_diario, periodos_agregacao)

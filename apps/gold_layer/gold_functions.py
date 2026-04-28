@@ -211,18 +211,21 @@ class CamadaGold:
             return None
     
     # ========== DIM_TEMPO ==========
-    def criar_dim_tempo(self, data_inicio: datetime, data_fim: datetime) -> pd.DataFrame:
+    def criar_dim_tempo(self, data_inicio: datetime = None, data_fim: datetime = None) -> pd.DataFrame:
         """
-        Cria dimensao de tempo
+        Cria dimensao de tempo usando apenas D-1 (ontem)
         
         Args:
-            data_inicio: data inicial (YYYY-MM-DD)
-            data_fim: data final (YYYY-MM-DD)
+            data_inicio: ignorado (mantido por compatibilidade)
+            data_fim: ignorado (mantido por compatibilidade)
         
         Returns:
             DataFrame com dim_tempo
         """
-        datas = pd.date_range(start=data_inicio, end=data_fim, freq='D')
+        # Determina o primeiro dia do mês atual até hoje
+        hoje = datetime.now().date()
+        primeiro_dia_mes_atual = hoje.replace(day=1)
+        datas = pd.date_range(start=primeiro_dia_mes_atual, end=hoje, freq='D')
         
         dim_tempo = pd.DataFrame({
             'sk_data': datas.strftime('%Y%m%d').astype(int),
@@ -236,7 +239,7 @@ class CamadaGold:
         })
         
         self.dim_tempo = dim_tempo
-        print(f"✓ dim_tempo criada: {len(dim_tempo)} registros")
+        print(f"✓ dim_tempo criada: {len(dim_tempo)} registros ({primeiro_dia_mes_atual} a {hoje})")
         return dim_tempo
     
     # ========== DIM_FUNDO ==========
