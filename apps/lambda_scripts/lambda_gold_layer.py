@@ -28,6 +28,7 @@ Payload opcional:
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 from dataclasses import dataclass
@@ -64,8 +65,8 @@ DEFAULT_SILVER_BUCKET = "s3-asset-sirius-bucket-silver"
 DEFAULT_GOLD_BUCKET = "s3-asset-sirius-bucket-gold"
 DEFAULT_PREFIXO_SILVER = "cvm/clean"
 DEFAULT_PREFIXO_GOLD = "cvm/gold"
-DEFAULT_DATA_INICIO = "2023-01-01"
-DEFAULT_DATA_FIM = "2024-12-31"
+DEFAULT_DATA_INICIO = "2025-01-01"
+DEFAULT_DATA_FIM = "2026-05-30"
 DEFAULT_PERIODOS_AGREGACAO = [7, 30, 60, 90]
 
 
@@ -194,7 +195,24 @@ def _salvar_particionado_s3(s3_client, df: pd.DataFrame, col_data: str,
         # Extrai ano_mes: YYYYMMDD // 100 = YYYYMM
         df_temp['ano_mes'] = (df_temp[col_data] // 100).astype(str)
         
+        log("INFO", f"  Particionando {nome_tabela}...")
+        log("INFO", f"    Total de registros: {len(df_temp)}")
+        log("INFO", f"    Coluna de data usada: {col_data}")
+        log("INFO", f"    Primeiras datas: {df_temp[col_data].head(3).tolist()}")
+        log("INFO", f"    Últimas datas: {df_temp[col_data].tail(3).tolist()}")
+        log("INFO", f"    Data mín/máx: {df_temp[col_data].min()} / {df_temp[col_data].max()}")
+        
+        # Mostra distribuição por mês ANTES de salvar
+        anos_meses_unicos = df_temp['ano_mes'].unique()
+        log("INFO", f"    Partições encontradas: {len(anos_meses_unicos)}")
+        log("INFO", f"    Meses: {sorted(anos_meses_unicos)}")
+        for ano_mes in sorted(anos_meses_unicos):
+            qtd = len(df_temp[df_temp['ano_mes'] == ano_mes])
+            log("INFO", f"      - {ano_mes}: {qtd} registros")
+        
         tamanho_total = 0
+        meses_salvos = 0
+        
         for ano_mes, grupo in df_temp.groupby('ano_mes', sort=True):
             grupo_clean = grupo.drop(columns=['ano_mes'])
 
@@ -203,9 +221,18 @@ def _salvar_particionado_s3(s3_client, df: pd.DataFrame, col_data: str,
             grupo_clean.to_csv(buffer_csv, sep=';', index=False)
             key_csv = f"{prefixo}/{nome_tabela}/ano_mes={ano_mes}/data.csv"
             conteudo_csv = buffer_csv.getvalue().encode('latin-1')
-            s3_client.put_object(Bucket=bucket, Key=key_csv, Body=conteudo_csv)
-            tamanho_total += len(conteudo_csv) / (1024 * 1024)
+            
+            try:
+                s3_client.put_object(Bucket=bucket, Key=key_csv, Body=conteudo_csv)
+                tamanho_mb = len(conteudo_csv) / (1024 * 1024)
+                tamanho_total += tamanho_mb
+                meses_salvos += 1
+                log("INFO", f"    ✓ Salvo: {key_csv} ({tamanho_mb:.4f} MB, {len(grupo_clean)} registros)")
+            except Exception as e_s3:
+                log("ERROR", f"    ✗ Erro ao salvar {key_csv}: {e_s3}")
+                raise
         
+        log("INFO", f"  ✓ {nome_tabela}: {meses_salvos} partições, {tamanho_total:.2f} MB total")
         return tamanho_total
     except Exception as e:
         log("ERROR", f"Erro ao salvar particionado S3 {nome_tabela}: {e}")
@@ -236,20 +263,21 @@ def _encontrar_coluna_opcional(df: pd.DataFrame, variacoes: list) -> Optional[st
 
 def criar_dim_tempo(data_inicio: Optional[str] = None, data_fim: Optional[str] = None) -> pd.DataFrame:
     """
-    Cria dimensão de tempo usando apenas D-1 (ontem)
+    Cria dimensão de tempo com o intervalo de datas especificado
     
     Args:
-        data_inicio: ignorado (mantido por compatibilidade)
-        data_fim: ignorado (mantido por compatibilidade)
+        data_inicio: data de início (formato: YYYY-MM-DD) ou None para usar DEFAULT_DATA_INICIO
+        data_fim: data de fim (formato: YYYY-MM-DD) ou None para usar DEFAULT_DATA_FIM
     
     Returns:
         DataFrame com dim_tempo
     """
     try:
-        # Determina o primeiro dia do mês atual até hoje
-        hoje = datetime.now().date()
-        primeiro_dia_mes_atual = hoje.replace(day=1)
-        datas = pd.date_range(start=primeiro_dia_mes_atual, end=hoje, freq='D')
+        # Usa valores passados ou defaults
+        inicio = data_inicio or DEFAULT_DATA_INICIO
+        fim = data_fim or DEFAULT_DATA_FIM
+        
+        datas = pd.date_range(start=inicio, end=fim, freq='D')
         
         dim_tempo = pd.DataFrame({
             'sk_data': datas.strftime('%Y%m%d').astype(int),
@@ -262,7 +290,7 @@ def criar_dim_tempo(data_inicio: Optional[str] = None, data_fim: Optional[str] =
             'eh_fim_de_mes': datas.is_month_end.astype(int)
         })
         
-        log("INFO", f"dim_tempo criada: {len(dim_tempo)} registros ({primeiro_dia_mes_atual} a {hoje})")
+        log("INFO", f"dim_tempo criada: {len(dim_tempo)} registros ({inicio} a {fim})")
         return dim_tempo
     except Exception as e:
         log("ERROR", f"Erro ao criar dim_tempo: {e}")
@@ -412,7 +440,11 @@ def criar_fct_fundo_diario(df_inf_diario: pd.DataFrame,
         
         fct_final = fct[colunas_fct].dropna(subset=['sk_fundo'])
         
-        log("INFO", f"fct_fundo_diario criada: {len(fct_final)} registros")
+        # Diagnóstico: datas únicas em fct_fundo_diario
+        datas_unicas_fct = fct_final['sk_data'].unique()
+        log("INFO", f"fct_fundo_diario criada: {len(fct_final)} registros, {len(datas_unicas_fct)} datas únicas")
+        log("DEBUG", f"  Data mín/máx: {fct_final['sk_data'].min()} / {fct_final['sk_data'].max()}")
+        log("DEBUG", f"  Fundos únicos: {fct_final['sk_fundo'].nunique()}")
         return fct_final
     except Exception as e:
         log("ERROR", f"Erro ao criar fct_fundo_diario: {e}")
@@ -422,7 +454,7 @@ def criar_fct_fundo_diario(df_inf_diario: pd.DataFrame,
 def criar_agg_fundo_periodo(fct_fundo_diario: pd.DataFrame,
                             periodos: list = None) -> pd.DataFrame:
     """
-    Cria agregação por período
+    Cria agregação por período usando janelas móveis (otimizado com groupby)
     
     Args:
         fct_fundo_diario: fato fundo diário
@@ -436,65 +468,81 @@ def criar_agg_fundo_periodo(fct_fundo_diario: pd.DataFrame,
             periodos = [7, 30, 60, 90]
         
         fct = fct_fundo_diario.copy()
+        fct['data'] = pd.to_datetime(fct['sk_data'], format='%Y%m%d')
+        
+        # Diagnóstico: mostra datas únicas em fct_fundo_diario
+        datas_unicas = fct['sk_data'].unique()
+        log("DEBUG", f"  agg_fundo_periodo - Datas únicas em fct_fundo_diario: {len(datas_unicas)}")
+        log("DEBUG", f"    Data mín: {fct['sk_data'].min()}, Data máx: {fct['sk_data'].max()}")
+        
+        # Ordena por fundo e data (CRÍTICO para rolling windows)
+        fct = fct.sort_values(['sk_fundo', 'data']).reset_index(drop=True)
         
         agregados = []
         
         for periodo in periodos:
-            agg = fct.copy()
-            agg['periodo'] = periodo
-            # Converte sk_data para datetime antes de agregar
-            agg['data_temp'] = pd.to_datetime(agg['sk_data'], format='%Y%m%d')
+            log("DEBUG", f"  Calculando período {periodo} dias...")
             
-            # Agrupa por sk_fundo em janelas moveis
-            agg_grouped = agg.groupby(['sk_fundo', 'periodo']).agg({
-                'captacao_dia': 'sum',
-                'resgate_dia': 'sum',
-                'fluxo_liquido_dia': 'sum',
-                'variacao_pl_dia_pct': 'mean',
-                'variacao_cotistas_dia_pct': 'mean',
-                'data_temp': 'max'
-            }).reset_index()
+            # Função para aplicar rolling em cada grupo de fundo
+            def calcular_rolling(grupo):
+                grupo = grupo.sort_values('data').reset_index(drop=True)
+                
+                grupo['captacao_periodo'] = grupo['captacao_dia'].rolling(window=periodo, min_periods=1).sum()
+                grupo['resgate_periodo'] = grupo['resgate_dia'].rolling(window=periodo, min_periods=1).sum()
+                grupo['fluxo_liquido_periodo'] = grupo['fluxo_liquido_dia'].rolling(window=periodo, min_periods=1).sum()
+                grupo['var_patrimonio_periodo_pct'] = grupo['variacao_pl_dia_pct'].rolling(window=periodo, min_periods=1).mean()
+                grupo['var_cotistas_periodo_pct'] = grupo['variacao_cotistas_dia_pct'].rolling(window=periodo, min_periods=1).mean()
+                
+                return grupo
             
-            agg_grouped.columns = [
-                'sk_fundo',
-                'periodo',
-                'captacao_periodo',
-                'resgate_periodo',
-                'fluxo_liquido_periodo',
-                'var_patrimonio_periodo_pct',
-                'var_cotistas_periodo_pct',
-                'data_temp'
-            ]
+            # Aplica rolling para cada fundo de uma vez
+            agg_periodo = fct.groupby('sk_fundo', sort=False).apply(calcular_rolling)
+            # Reconverte sk_fundo do índice para coluna (MultiIndex após apply)
+            agg_periodo = agg_periodo.reset_index(level=1, drop=True).reset_index()
             
-            # Converte data_temp (datetime) para data_referencia (inteiro YYYYMMDD)
-            agg_grouped['data_referencia'] = agg_grouped['data_temp'].dt.strftime('%Y%m%d').astype(int)
-            agg_grouped = agg_grouped.drop(columns=['data_temp'])
+            # Preenche NaNs
+            agg_periodo['var_patrimonio_periodo_pct'] = agg_periodo['var_patrimonio_periodo_pct'].fillna(0)
+            agg_periodo['var_cotistas_periodo_pct'] = agg_periodo['var_cotistas_periodo_pct'].fillna(0)
             
-            # Calcula variações
-            agg_grouped['var_patrimonio_periodo_pct'] = agg_grouped['var_patrimonio_periodo_pct'].fillna(0)
-            agg_grouped['var_cotistas_periodo_pct'] = agg_grouped['var_cotistas_periodo_pct'].fillna(0)
-            
-            # Score de risco (v1)
-            agg_grouped['score_risco_fundo'] = (
-                50 + agg_grouped['var_patrimonio_periodo_pct'].abs() * 10
+            # Score de risco
+            agg_periodo['score_risco_fundo'] = (
+                50 + agg_periodo['var_patrimonio_periodo_pct'].abs() * 10
             ).clip(0, 100)
             
             # Classificação de risco
-            agg_grouped['nivel_risco_fundo'] = pd.cut(
-                agg_grouped['score_risco_fundo'],
+            agg_periodo['nivel_risco_fundo'] = pd.cut(
+                agg_periodo['score_risco_fundo'],
                 bins=[0, 45, 70, 100],
                 labels=['baixo', 'medio', 'alto']
             )
             
-            agregados.append(agg_grouped[[
+            # Mantém apenas colunas necessárias
+            agg_periodo['periodo'] = periodo
+            agg_periodo['data_referencia'] = agg_periodo['sk_data']
+            
+            agregados.append(agg_periodo[[
                 'periodo', 'data_referencia', 'sk_fundo',
                 'captacao_periodo', 'resgate_periodo', 'fluxo_liquido_periodo',
                 'var_patrimonio_periodo_pct', 'var_cotistas_periodo_pct',
                 'score_risco_fundo', 'nivel_risco_fundo'
             ]])
+            
+            gc.collect()
         
         agg_final = pd.concat(agregados, ignore_index=True)
+        del agregados
+        gc.collect()
+        
+        # Diagnóstico: datas únicas em agg_fundo_periodo
+        datas_unicas_agg = agg_final['data_referencia'].unique()
         log("INFO", f"agg_fundo_periodo criada: {len(agg_final)} registros ({len(periodos)} períodos)")
+        log("DEBUG", f"  Datas únicas: {len(datas_unicas_agg)}")
+        log("DEBUG", f"  Data mín/máx: {agg_final['data_referencia'].min()} / {agg_final['data_referencia'].max()}")
+        log("DEBUG", f"  Distribuição por período:")
+        for periodo in periodos:
+            qtd = len(agg_final[agg_final['periodo'] == periodo])
+            log("DEBUG", f"    Período {periodo} dias: {qtd} registros")
+        
         return agg_final
     except Exception as e:
         log("ERROR", f"Erro ao criar agg_fundo_periodo: {e}")
@@ -564,21 +612,135 @@ def lambda_handler(event, context):
         
         if modo == "local":
             path_silver = Path("dados_tgt")
-            df_inf_diario = ler_csv_local(path_silver / "inf_diario_fi_202401_clean.csv")
+            
+            # Carrega todos os arquivos de informe diário no intervalo de datas
+            arquivos_inf = sorted(path_silver.glob("inf_diario_fi_*_clean.csv"))
+            log("INFO", f"  Procurando por: inf_diario_fi_*_clean.csv em {path_silver}")
+            log("INFO", f"  Arquivos encontrados: {len(arquivos_inf)}")
+            
+            dfs_inf = []
+            for arquivo in arquivos_inf:
+                try:
+                    df_temp = ler_csv_local(arquivo)
+                    dfs_inf.append(df_temp)
+                    log("INFO", f"  ✓ Carregado: {arquivo.name} ({len(df_temp)} registros)")
+                except Exception as e:
+                    log("WARN", f"  ✗ Erro ao carregar {arquivo.name}: {e}")
+            
+            if not dfs_inf:
+                raise ValueError(f"Nenhum arquivo inf_diario_fi_*_clean.csv encontrado em {path_silver}")
+            
+            df_inf_diario = pd.concat(dfs_inf, ignore_index=True)
+            del dfs_inf  # Libera memória dos arquivos carregados
+            gc.collect()
+            
+            # Diagnóstico: datas carregadas
+            col_data_carregada = None
+            for variacoes in [['DT_COMPTC', 'dt_comptc', 'Data'], ['Data_Competencia', 'data_competencia']]:
+                for var in variacoes:
+                    if var.lower() in [c.lower() for c in df_inf_diario.columns]:
+                        col_data_carregada = var
+                        break
+                if col_data_carregada:
+                    break
+            
+            if col_data_carregada:
+                datas_carregadas = pd.to_datetime(df_inf_diario[col_data_carregada], errors='coerce')
+                log("INFO", f"  ✓ Informe diário: {len(df_inf_diario)} registros, datas de {datas_carregadas.min().date()} a {datas_carregadas.max().date()}")
+            else:
+                log("INFO", f"  ✓ Informe diário: {len(df_inf_diario)} registros")
+            
             df_registro_classe = ler_csv_local(path_silver / "registro_classe_clean.csv")
             df_registro_fundo = ler_csv_local(path_silver / "registro_fundo_clean.csv")
         else:
             s3_client = boto3.client("s3")
             objetos = listar_csvs_s3(s3_client, bucket_silver, prefixo_silver)
             
-            key_inf = selecionar_mais_recente(objetos, "inf_diario_fi")
+            # Extrai ano_mes dos parâmetros para filtrar arquivos
+            data_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
+            data_fim_dt = datetime.strptime(data_fim, "%Y-%m-%d")
+            ano_mes_ini = int(data_ini.strftime("%Y%m"))
+            ano_mes_fim = int(data_fim_dt.strftime("%Y%m"))
+            
+            log("INFO", f"  Filtro de período: {ano_mes_ini} a {ano_mes_fim}")
+            
+            # Carrega APENAS arquivos de informe diário no intervalo de datas
+            keys_inf_candidatos = [obj["Key"] for obj in objetos if "inf_diario_fi" in obj["Key"].lower()]
+            keys_inf = []
+            
+            for key in keys_inf_candidatos:
+                # Extrai YYYYMM do nome do arquivo (ex: inf_diario_fi_202605_clean.csv)
+                try:
+                    partes = key.split('_')
+                    for i, parte in enumerate(partes):
+                        if len(parte) == 6 and parte.isdigit():
+                            ano_mes_arquivo = int(parte)
+                            if ano_mes_ini <= ano_mes_arquivo <= ano_mes_fim:
+                                keys_inf.append(key)
+                            break
+                except Exception as e:
+                    log("WARN", f"  Não foi possível extrair período de {key}: {e}")
+            
             key_classe = selecionar_mais_recente(objetos, "registro_classe")
             key_fundo = selecionar_mais_recente(objetos, "registro_fundo")
             
-            if not (key_inf and key_classe and key_fundo):
+            if not (keys_inf and key_classe and key_fundo):
                 raise ValueError("Arquivos Silver obrigatórios não encontrados")
             
-            df_inf_diario = ler_csv_s3(s3_client, bucket_silver, key_inf)
+            log("INFO", f"  Arquivos inf_diario no período [{ano_mes_ini}-{ano_mes_fim}]: {len(keys_inf)}")
+            
+            # Carrega arquivos de informe diário do intervalo
+            dfs_inf = []
+            for key in sorted(keys_inf):
+                try:
+                    df_temp = ler_csv_s3(s3_client, bucket_silver, key)
+                    
+                    # Encontra coluna de data e filtra pelo intervalo
+                    col_data_temp = None
+                    for variacoes in [['DT_COMPTC', 'dt_comptc', 'Data'], ['Data_Competencia', 'data_competencia']]:
+                        for var in variacoes:
+                            if var.lower() in [c.lower() for c in df_temp.columns]:
+                                col_data_temp = var
+                                break
+                        if col_data_temp:
+                            break
+                    
+                    if col_data_temp:
+                        df_temp['_data_temp'] = pd.to_datetime(df_temp[col_data_temp], errors='coerce')
+                        df_temp = df_temp[(df_temp['_data_temp'] >= pd.Timestamp(data_inicio)) & 
+                                         (df_temp['_data_temp'] <= pd.Timestamp(data_fim))]
+                        df_temp = df_temp.drop(columns=['_data_temp'])
+                    
+                    dfs_inf.append(df_temp)
+                    arquivo_nome = key.split('/')[-1]
+                    log("INFO", f"  ✓ Carregado do S3: {arquivo_nome} ({len(df_temp)} registros após filtro)")
+                except Exception as e:
+                    arquivo_nome = key.split('/')[-1]
+                    log("WARN", f"  ✗ Erro ao carregar {arquivo_nome}: {e}")
+            
+            if not dfs_inf:
+                raise ValueError("Nenhum arquivo inf_diario_fi encontrado no S3 para o período")
+            
+            df_inf_diario = pd.concat(dfs_inf, ignore_index=True)
+            del dfs_inf  # Libera memória dos arquivos carregados
+            gc.collect()
+            
+            # Diagnóstico: datas carregadas do S3
+            col_data_carregada = None
+            for variacoes in [['DT_COMPTC', 'dt_comptc', 'Data'], ['Data_Competencia', 'data_competencia']]:
+                for var in variacoes:
+                    if var.lower() in [c.lower() for c in df_inf_diario.columns]:
+                        col_data_carregada = var
+                        break
+                if col_data_carregada:
+                    break
+            
+            if col_data_carregada:
+                datas_carregadas = pd.to_datetime(df_inf_diario[col_data_carregada], errors='coerce')
+                log("INFO", f"  ✓ Informe diário (total): {len(df_inf_diario)} registros, datas de {datas_carregadas.min().date()} a {datas_carregadas.max().date()}")
+            else:
+                log("INFO", f"  ✓ Informe diário (total): {len(df_inf_diario)} registros")
+            
             df_registro_classe = ler_csv_s3(s3_client, bucket_silver, key_classe)
             df_registro_fundo = ler_csv_s3(s3_client, bucket_silver, key_fundo)
         
@@ -590,14 +752,21 @@ def lambda_handler(event, context):
         
         log("INFO", "[2/4] Criando tabelas reais (CVM)...")
         
-        dim_tempo = criar_dim_tempo()
+        dim_tempo = criar_dim_tempo(data_inicio, data_fim)
         dim_fundo = criar_dim_fundo(df_registro_classe, df_registro_fundo)
         fct_fundo_diario = criar_fct_fundo_diario(df_inf_diario, dim_tempo, dim_fundo)
+        del df_inf_diario, df_registro_classe, df_registro_fundo  # Libera dados de input
+        gc.collect()
+        
+        log("INFO", f"  ✓ fct_fundo_diario: {len(fct_fundo_diario)} registros")
         agg_fundo_periodo = criar_agg_fundo_periodo(fct_fundo_diario, periodos_agregacao)
+        gc.collect()
+        log("INFO", f"  ✓ agg_fundo_periodo: {len(agg_fundo_periodo)} registros")
         
         # ========== SALVA GOLD ==========
         
         log("INFO", "[3/4] Salvando tabelas Gold...")
+        gc.collect()  # Limpa memória antes de salvar
         
         if modo == "local":
             path_gold = Path("data/gold")
@@ -624,7 +793,10 @@ def lambda_handler(event, context):
         else:
             s3_client = boto3.client("s3")
             
+            log("INFO", f"  Salvando em S3: s3://{bucket_gold}/{prefixo_gold}")
+            
             # Dimensões (sem particionamento)
+            log("INFO", "  Salvando dimensões...")
             salvar_parquet_s3(s3_client, dim_tempo, bucket_gold, f"{prefixo_gold}/dim_tempo/data.parquet")
             tabelas_processadas.append(TabelaGoldProcessada("dim_tempo", len(dim_tempo), 0.1))
             
@@ -632,6 +804,7 @@ def lambda_handler(event, context):
             tabelas_processadas.append(TabelaGoldProcessada("dim_fundo", len(dim_fundo), 0.1))
             
             # Fatos (com particionamento por mês)
+            log("INFO", "  Salvando fatos com particionamento...")
             tamanho = _salvar_particionado_s3(s3_client, fct_fundo_diario, "sk_data", "fct_fundo_diario", bucket_gold, prefixo_gold)
             tabelas_processadas.append(TabelaGoldProcessada("fct_fundo_diario", len(fct_fundo_diario), tamanho))
             
