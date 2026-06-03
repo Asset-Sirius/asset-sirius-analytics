@@ -73,14 +73,14 @@ DEFAULT_PERIODOS_AGREGACAO = [7, 30, 60, 90]
 # ========== UTILITARIOS S3 ==========
 
 def ler_csv_s3(s3_client, bucket: str, key: str) -> pd.DataFrame:
-    """Le CSV do S3 (separador `;`, encoding `latin1`)"""
+    """Le CSV do S3 (separador `;`, encoding `utf-8`)"""
     try:
         objeto = s3_client.get_object(Bucket=bucket, Key=key)
         conteudo = objeto["Body"].read()
         return pd.read_csv(
             io.BytesIO(conteudo),
             sep=";",
-            encoding="latin1",
+            encoding="utf-8",
             low_memory=False
         )
     except Exception as e:
@@ -133,14 +133,14 @@ def ler_csv_local(caminho: Path) -> pd.DataFrame:
     """Le CSV local com deteccao automatica de separador"""
     try:
         # Tenta detectar separador
-        with open(caminho, 'r', encoding='latin-1') as f:
+        with open(caminho, 'r', encoding='utf-8') as f:
             primeira_linha = f.readline()
         
         virgulas = primeira_linha.count(',')
         ponto_virgulas = primeira_linha.count(';')
         sep = ';' if ponto_virgulas > virgulas else ','
         
-        return pd.read_csv(caminho, sep=sep, encoding='latin-1', low_memory=False)
+        return pd.read_csv(caminho, sep=sep, encoding='utf-8', low_memory=False)
     except Exception as e:
         log("ERROR", f"Erro ao ler local {caminho}: {e}")
         raise
@@ -178,7 +178,7 @@ def _salvar_particionado_local(df: pd.DataFrame, col_data: str,
             path_mes.mkdir(parents=True, exist_ok=True)
             
             grupo_clean.to_parquet(f"{path_mes}/data.parquet", index=False, compression="snappy")
-            grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='latin-1')
+            grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='utf-8')
             tamanho_total += (path_mes / "data.parquet").stat().st_size / (1024 * 1024)
         
         return tamanho_total
@@ -218,9 +218,9 @@ def _salvar_particionado_s3(s3_client, df: pd.DataFrame, col_data: str,
 
             # Salva apenas CSV para tabelas particionadas
             buffer_csv = io.StringIO()
-            grupo_clean.to_csv(buffer_csv, sep=';', index=False)
+            grupo_clean.to_csv(buffer_csv, sep=';', index=False, encoding='utf-8')
             key_csv = f"{prefixo}/{nome_tabela}/ano_mes={ano_mes}/data.csv"
-            conteudo_csv = buffer_csv.getvalue().encode('latin-1')
+            conteudo_csv = buffer_csv.getvalue().encode('utf-8')
             
             try:
                 s3_client.put_object(Bucket=bucket, Key=key_csv, Body=conteudo_csv)
@@ -775,13 +775,13 @@ def lambda_handler(event, context):
             path_dim_tempo = path_gold / "dim_tempo"
             path_dim_tempo.mkdir(parents=True, exist_ok=True)
             dim_tempo.to_parquet(f"{path_dim_tempo}/data.parquet", index=False, compression="snappy")
-            dim_tempo.to_csv(f"{path_dim_tempo}/data.csv", index=False, sep=';', encoding='latin-1')
+            dim_tempo.to_csv(f"{path_dim_tempo}/data.csv", index=False, sep=';', encoding='utf-8')
             tabelas_processadas.append(TabelaGoldProcessada("dim_tempo", len(dim_tempo), 0.1))
             
             path_dim_fundo = path_gold / "dim_fundo"
             path_dim_fundo.mkdir(parents=True, exist_ok=True)
             dim_fundo.to_parquet(f"{path_dim_fundo}/data.parquet", index=False, compression="snappy")
-            dim_fundo.to_csv(f"{path_dim_fundo}/data.csv", index=False, sep=';', encoding='latin-1')
+            dim_fundo.to_csv(f"{path_dim_fundo}/data.csv", index=False, sep=';', encoding='utf-8')
             tabelas_processadas.append(TabelaGoldProcessada("dim_fundo", len(dim_fundo), 0.1))
             
             # Fatos (com particionamento por mês)

@@ -44,7 +44,7 @@ class CamadaGold:
             Separador detectado (`,` ou `;`)
         """
         try:
-            with open(filepath, 'r', encoding='latin-1') as f:
+            with open(filepath, 'r', encoding='utf-8') as f:
                 primeira_linha = f.readline()
             
             # Testa qual separador tem mais colunas
@@ -81,7 +81,7 @@ class CamadaGold:
                     df_temp = pd.read_csv(
                         arquivo,
                         sep=sep,                # ✅ Detecta `,` ou `;`
-                        encoding='latin-1',
+                        encoding='utf-8',
                         on_bad_lines='warn',
                         engine='python'
                     )
@@ -107,7 +107,7 @@ class CamadaGold:
             self.df_registro_fundo = pd.read_csv(
                 arquivo_fundo,
                 sep=sep_fundo,
-                encoding='latin-1',
+                encoding='utf-8',
                 on_bad_lines='warn',
                 engine='python'
             )
@@ -124,7 +124,7 @@ class CamadaGold:
             self.df_registro_classe = pd.read_csv(
                 arquivo_classe,
                 sep=sep_classe,
-                encoding='latin-1',
+                encoding='utf-8',
                 on_bad_lines='warn',
                 engine='python'
             )
@@ -588,14 +588,14 @@ class CamadaGold:
             path_dim_tempo = Path(path_output) / "dim_tempo"
             path_dim_tempo.mkdir(parents=True, exist_ok=True)
             self.dim_tempo.to_parquet(f"{path_dim_tempo}/data.parquet", index=False)
-            self.dim_tempo.to_csv(f"{path_dim_tempo}/data.csv", index=False, sep=';', encoding='latin-1')
+            self.dim_tempo.to_csv(f"{path_dim_tempo}/data.csv", index=False, sep=';', encoding='utf-8')
             print(f"  ✓ dim_tempo/ (arquivo único)")
             
             # dim_fundo
             path_dim_fundo = Path(path_output) / "dim_fundo"
             path_dim_fundo.mkdir(parents=True, exist_ok=True)
             self.dim_fundo.to_parquet(f"{path_dim_fundo}/data.parquet", index=False)
-            self.dim_fundo.to_csv(f"{path_dim_fundo}/data.csv", index=False, sep=';', encoding='latin-1')
+            self.dim_fundo.to_csv(f"{path_dim_fundo}/data.csv", index=False, sep=';', encoding='utf-8')
             print(f"  ✓ dim_fundo/ (arquivo único)")
             
             # ========== FATOS (COM PARTICIONAMENTO POR MÊS) ==========
@@ -655,7 +655,7 @@ class CamadaGold:
                 
                 # Salva parquet e csv
                 grupo_clean.to_parquet(f"{path_mes}/data.parquet", index=False)
-                grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='latin-1')
+                grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='utf-8')
         
         except Exception as e:
             print(f"✗ Erro ao exportar particionado {nome_tabela}: {e}")
@@ -822,7 +822,7 @@ class SimuladorClientes:
                 path_dim_cliente = Path(path_output) / "dim_cliente_simulado"
                 path_dim_cliente.mkdir(parents=True, exist_ok=True)
                 self.dim_cliente.to_parquet(f"{path_dim_cliente}/data.parquet", index=False)
-                self.dim_cliente.to_csv(f"{path_dim_cliente}/data.csv", index=False, sep=';', encoding='latin-1')
+                self.dim_cliente.to_csv(f"{path_dim_cliente}/data.csv", index=False, sep=';', encoding='utf-8')
                 print(f"  ✓ dim_cliente_simulado/ (arquivo único)")
             
             if self.fct_cliente_posicao is not None:
@@ -866,7 +866,7 @@ class SimuladorClientes:
                 path_mes.mkdir(parents=True, exist_ok=True)
                 
                 grupo_clean.to_parquet(f"{path_mes}/data.parquet", index=False)
-                grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='latin-1')
+                grupo_clean.to_csv(f"{path_mes}/data.csv", index=False, sep=';', encoding='utf-8')
         
         except Exception as e:
             print(f"✗ Erro ao exportar particionado {nome_tabela}: {e}")

@@ -22,12 +22,12 @@ def limpar_texto(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def carregar_csv(caminho_arquivo: Path) -> pd.DataFrame:
-    return pd.read_csv(caminho_arquivo, sep=";", encoding="latin1", low_memory=False)
+    return pd.read_csv(caminho_arquivo, sep=";", encoding="utf-8", low_memory=False)
 
 
 def salvar_csv(df: pd.DataFrame, caminho_arquivo: Path) -> None:
     caminho_arquivo.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(caminho_arquivo, sep=";", index=False)
+    df.to_csv(caminho_arquivo, sep=";", index=False, encoding="utf-8")
 
 
 def filtrar_registro_fundo(df: pd.DataFrame) -> pd.DataFrame:

@@ -99,12 +99,12 @@ def limpeza_basica(df: pd.DataFrame) -> pd.DataFrame:
 def ler_csv_s3(s3_client, bucket: str, key: str) -> pd.DataFrame:
     objeto = s3_client.get_object(Bucket=bucket, Key=key)
     conteudo = objeto["Body"].read()
-    return pd.read_csv(io.BytesIO(conteudo), sep=";", encoding="latin1", low_memory=False)
+    return pd.read_csv(io.BytesIO(conteudo), sep=";", encoding="utf-8", low_memory=False)
 
 
 def salvar_csv_s3(s3_client, df: pd.DataFrame, bucket: str, key: str) -> None:
     buffer = io.StringIO()
-    df.to_csv(buffer, sep=";", index=False)
+    df.to_csv(buffer, sep=";", index=False, encoding="utf-8")
     s3_client.put_object(Bucket=bucket, Key=key, Body=buffer.getvalue().encode("utf-8"))
 
 
