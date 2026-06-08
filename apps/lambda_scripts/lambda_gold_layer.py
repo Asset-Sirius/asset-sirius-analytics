@@ -31,6 +31,7 @@ from __future__ import annotations
 import gc
 import io
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -125,6 +126,14 @@ def selecionar_mais_recente(objetos: list[dict], contem: str) -> Optional[str]:
         return None
     candidatos.sort(key=lambda obj: obj.get("LastModified"), reverse=True)
     return candidatos[0]["Key"]
+
+
+def _extrair_ano_mes_de_key(key: str) -> Optional[int]:
+    """Extrai um token YYYYMM de uma key S3, se existir."""
+    matches = re.findall(r"(?<!\d)(\d{6})(?!\d)", key)
+    if not matches:
+        return None
+    return int(matches[-1])
 
 
 # ========== UTILITARIOS LOCAIS ==========
@@ -667,25 +676,34 @@ def lambda_handler(event, context):
             # Carrega APENAS arquivos de informe diário no intervalo de datas
             keys_inf_candidatos = [obj["Key"] for obj in objetos if "inf_diario_fi" in obj["Key"].lower()]
             keys_inf = []
+            keys_inf_fora_periodo = []
             
             for key in keys_inf_candidatos:
-                # Extrai YYYYMM do nome do arquivo (ex: inf_diario_fi_202605_clean.csv)
-                try:
-                    partes = key.split('_')
-                    for i, parte in enumerate(partes):
-                        if len(parte) == 6 and parte.isdigit():
-                            ano_mes_arquivo = int(parte)
-                            if ano_mes_ini <= ano_mes_arquivo <= ano_mes_fim:
-                                keys_inf.append(key)
-                            break
-                except Exception as e:
-                    log("WARN", f"  Não foi possível extrair período de {key}: {e}")
+                ano_mes_arquivo = _extrair_ano_mes_de_key(key)
+                if ano_mes_arquivo is None:
+                    log("WARN", f"  Não foi possível extrair período de {key}")
+                    continue
+
+                if ano_mes_ini <= ano_mes_arquivo <= ano_mes_fim:
+                    keys_inf.append(key)
+                else:
+                    keys_inf_fora_periodo.append(key)
             
             key_classe = selecionar_mais_recente(objetos, "registro_classe")
             key_fundo = selecionar_mais_recente(objetos, "registro_fundo")
             
             if not (keys_inf and key_classe and key_fundo):
-                raise ValueError("Arquivos Silver obrigatórios não encontrados")
+                arquivos_encontrados = {
+                    "inf_diario_candidatos": len(keys_inf_candidatos),
+                    "inf_diario_no_periodo": len(keys_inf),
+                    "inf_diario_fora_periodo": len(keys_inf_fora_periodo),
+                    "registro_classe": bool(key_classe),
+                    "registro_fundo": bool(key_fundo),
+                }
+                raise ValueError(
+                    "Arquivos Silver obrigatórios não encontrados "
+                    f"(detalhes: {arquivos_encontrados})"
+                )
             
             log("INFO", f"  Arquivos inf_diario no período [{ano_mes_ini}-{ano_mes_fim}]: {len(keys_inf)}")
             
@@ -882,21 +900,3 @@ def lambda_handler(event, context):
             "statusCode": 500,
             "body": json.dumps(body, ensure_ascii=False, indent=2)
         }
-
-
-# ========== TESTE LOCAL ==========
-
-if __name__ == "__main__":
-    """Teste local da lambda"""
-    
-    # Teste modo local
-    print("\n🧪 TESTE LOCAL (modo=local)")
-    resultado = lambda_handler({
-        "modo": "local",
-        "data_inicio": "2023-01-01",
-        "data_fim": "2024-12-31",
-        "periodos_agregacao": [7, 30, 60, 90]
-    }, None)
-    
-    print(f"\nStatus: {resultado['statusCode']}")
-    print(resultado['body'])
