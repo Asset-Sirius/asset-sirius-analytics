@@ -99,7 +99,24 @@ def limpeza_basica(df: pd.DataFrame) -> pd.DataFrame:
 def ler_csv_s3(s3_client, bucket: str, key: str) -> pd.DataFrame:
     objeto = s3_client.get_object(Bucket=bucket, Key=key)
     conteudo = objeto["Body"].read()
-    return pd.read_csv(io.BytesIO(conteudo), sep=";", encoding="utf-8", low_memory=False)
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
+        try:
+            return pd.read_csv(
+                io.BytesIO(conteudo),
+                sep=";",
+                encoding=encoding,
+                low_memory=False,
+            )
+        except UnicodeDecodeError:
+            continue
+
+    raise UnicodeDecodeError(
+        "csv",
+        conteudo,
+        0,
+        len(conteudo),
+        "Não foi possível decodificar o arquivo CSV com os encodings suportados.",
+    )
 
 
 def salvar_csv_s3(s3_client, df: pd.DataFrame, bucket: str, key: str) -> None:
