@@ -8,8 +8,8 @@ import boto3
 import pandas as pd
 
 
-DEFAULT_BRONZE_BUCKET = "s3-asset-sirius-bucket-bronze"
-DEFAULT_SILVER_BUCKET = "s3-asset-sirius-bucket-silver"
+DEFAULT_BRONZE_BUCKET = "asset-sirius-bronze"
+DEFAULT_SILVER_BUCKET = "asset-sirius-silver"
 
 
 @dataclass(frozen=True)

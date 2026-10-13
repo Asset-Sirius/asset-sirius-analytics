@@ -62,8 +62,8 @@ class TabelaGoldProcessada:
 
 # ========== CONFIGURACOES PADRAO ==========
 
-DEFAULT_SILVER_BUCKET = "s3-asset-sirius-bucket-silver"
-DEFAULT_GOLD_BUCKET = "s3-asset-sirius-bucket-gold"
+DEFAULT_SILVER_BUCKET = "asset-sirius-silver"
+DEFAULT_GOLD_BUCKET = "asset-sirius-gold"
 DEFAULT_PREFIXO_SILVER = "cvm/clean"
 DEFAULT_PREFIXO_GOLD = "cvm/gold"
 DEFAULT_DATA_INICIO = "2025-01-01"

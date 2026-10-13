@@ -17,7 +17,7 @@ import boto3
 
 USER_AGENT = "Mozilla/5.0 (compatible; CVMDownloader/1.0)"
 BASE_URL = "https://dados.cvm.gov.br/dados/"
-DEFAULT_BRONZE_BUCKET = "s3-asset-sirius-bucket-bronze"
+DEFAULT_BRONZE_BUCKET = "asset-sirius-bronze"
 TMP_DIR = Path("/tmp/asset_sirius_ingestao")
 
 
